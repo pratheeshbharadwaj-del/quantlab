@@ -1,0 +1,5 @@
+- Build the local-first AI model quantization evaluation app described in the project brief.
+- Keep inference local; never fabricate metrics or automatically download models.
+- Backend: FastAPI with optional runtime adapters and explicit unsupported-format responses.
+- Frontend: React, TypeScript, Vite, Tailwind CSS; all controls must invoke real behavior.
+- Validate backend behavior with tests and document supported runtimes and limitations in README.md.

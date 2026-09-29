@@ -1,0 +1,22 @@
+[
+  {"id": 1, "question": "What is machine learning?", "expected_answer": "Machine learning is a field of artificial intelligence that enables computers to learn patterns from data and make predictions or decisions without being explicitly programmed for every task."},
+  {"id": 2, "question": "What is model quantization?", "expected_answer": "Model quantization reduces the numerical precision used to represent model weights and sometimes activations, usually reducing model size and memory use while potentially affecting output quality."},
+  {"id": 3, "question": "What is artificial intelligence?", "expected_answer": "Artificial intelligence is the ability of computer systems to perform tasks that typically require human intelligence, such as reasoning, perception, and language understanding."},
+  {"id": 4, "question": "What is a neural network?", "expected_answer": "A neural network is a computing model made of connected layers of units that learn patterns by adjusting numerical weights from data."},
+  {"id": 5, "question": "What does RAM do in a computer?", "expected_answer": "RAM is fast temporary memory that stores data and instructions currently used by running programs."},
+  {"id": 6, "question": "What is an inference in machine learning?", "expected_answer": "Inference is the process of using a trained machine learning model to produce a prediction or output from new input data."},
+  {"id": 7, "question": "What is a language model?", "expected_answer": "A language model is a model that assigns probabilities to sequences of text and can predict or generate text based on learned language patterns."},
+  {"id": 8, "question": "What does open source mean?", "expected_answer": "Open source software makes its source code available under a license that permits use, inspection, modification, and redistribution under stated terms."},
+  {"id": 9, "question": "What is a CPU?", "expected_answer": "A CPU is the central processing unit that executes general-purpose instructions for a computer."},
+  {"id": 10, "question": "What is a GPU commonly used for in AI?", "expected_answer": "A GPU performs many operations in parallel and is commonly used to accelerate the matrix computations found in AI workloads."},
+  {"id": 11, "question": "What is a dataset?", "expected_answer": "A dataset is an organized collection of examples or measurements used for analysis, evaluation, or training."},
+  {"id": 12, "question": "What is overfitting?", "expected_answer": "Overfitting occurs when a model learns details or noise in its training data so closely that it performs poorly on new data."},
+  {"id": 13, "question": "What is a tokenizer?", "expected_answer": "A tokenizer converts text into smaller units such as words, subwords, or tokens that a language model can process."},
+  {"id": 14, "question": "What is perplexity in language modeling?", "expected_answer": "Perplexity measures how well a language model predicts a sequence of text; lower perplexity generally indicates better prediction on that text."},
+  {"id": 15, "question": "What is an API?", "expected_answer": "An API is a defined interface that allows software components to communicate and use each other's functionality."},
+  {"id": 16, "question": "What does local inference mean?", "expected_answer": "Local inference means running a model on the user's own device rather than sending the input to a remote service."},
+  {"id": 17, "question": "What is an ONNX model?", "expected_answer": "ONNX is an open format for representing machine learning models so they can be exchanged and run by compatible tools."},
+  {"id": 18, "question": "What is a benchmark?", "expected_answer": "A benchmark is a repeatable measurement procedure used to compare performance under specified conditions."},
+  {"id": 19, "question": "What is accuracy?", "expected_answer": "Accuracy is the proportion of predictions that exactly match the correct labels or answers under a defined evaluation procedure."},
+  {"id": 20, "question": "Why compare quantized and original models on the same prompts?", "expected_answer": "Using the same prompts controls the input conditions so differences in output quality and performance can be compared more fairly."}
+]

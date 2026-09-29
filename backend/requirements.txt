@@ -1,0 +1,11 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+psutil>=6,<8
+python-multipart>=0.0.9
+pydantic>=2.8,<3
+# Optional model runtimes (install only when needed):
+# pip install llama-cpp-python
+# pip install torch transformers safetensors accelerate
+# pip install bitsandbytes  # plus accelerate for bitsandbytes-quantized models
+# pip install onnxruntime
+# pip install ai-edge-litert

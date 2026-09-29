@@ -1,0 +1,2 @@
+import type { Model } from '../services/api'
+export default function ModelSelector({ models, value, onChange, label }: { models: Model[]; value: string; onChange: (id: string) => void; label: string }) { return <label className="model-selector"><span>{label}</span><select value={value} onChange={event => onChange(event.target.value)}><option value="">Select a model</option>{models.map(model => <option key={model.id} value={model.id}>{model.name} · {model.format}</option>)}</select></label> }
