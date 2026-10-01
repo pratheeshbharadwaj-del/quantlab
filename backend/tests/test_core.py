@@ -28,7 +28,15 @@ class MetricTests(unittest.TestCase):
         self.assertEqual(output_similarity("", ""), 1.0)
 
     def test_missing_reference_scores_are_unavailable(self) -> None:
-        self.assertEqual(score_outputs([{"output": "answer"}]), {"exact_match": None, "token_f1": None})
+        self.assertEqual(score_outputs([{"output": "answer"}]), {"exact_match": None, "token_f1": None, "accuracy": None})
+
+    def test_free_form_metrics_report_overlap_without_fabricating_accuracy(self) -> None:
+        metrics = score_outputs([
+            {"output": "A model learns patterns from data automatically.", "expected_answer": "A model learns patterns from data."},
+            {"output": "completely unrelated text", "expected_answer": "A model learns patterns from data."},
+        ])
+        self.assertIsNone(metrics["accuracy"])
+        self.assertAlmostEqual(metrics["token_f1"], token_f1("A model learns patterns from data automatically.", "A model learns patterns from data.") / 2)
 
 
 class DetectorTests(unittest.TestCase):
@@ -62,6 +70,20 @@ class DetectorTests(unittest.TestCase):
             found = detect_model(root)
             self.assertTrue(found["chat_template_available"])
 
+    def test_detects_int8_per_tensor_metadata_in_safetensors(self) -> None:
+        import json
+        import struct
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config.json").write_text('{"architectures":["Qwen3ForCausalLM"]}', encoding="utf-8")
+            (root / "tokenizer_config.json").write_text('{"chat_template":"{{ messages }}"}', encoding="utf-8")
+            header = json.dumps({"__metadata__": {"quantization": "int8-per-tensor"}}).encode("utf-8")
+            (root / "model.safetensors").write_bytes(struct.pack("<Q", len(header)) + header)
+            found = detect_model(root)
+            self.assertEqual(found["quantization"], "8-bit (INT8 per-tensor)")
+            self.assertEqual(found["checkpoint_metadata"]["quantization"], "int8-per-tensor")
+
     def test_gpt2_chat_formatter_uses_current_question_not_old_turns(self) -> None:
         from app.runtimes.transformers_runtime import TransformersRuntime
         runtime = object.__new__(TransformersRuntime)
@@ -73,6 +95,32 @@ class DetectorTests(unittest.TestCase):
             {"role": "user", "content": "What is a token?"},
         ])
         self.assertEqual(formatted, "Question: What is a token?\nAnswer:")
+
+    def test_transformers_chat_template_disables_qwen_thinking_mode(self) -> None:
+        from app.runtimes.transformers_runtime import TransformersRuntime
+
+        runtime = object.__new__(TransformersRuntime)
+        runtime.model = object()
+        runtime.tokenizer = type("Tokenizer", (), {
+            "chat_template": "qwen-template",
+            "apply_chat_template": lambda self, messages, **kwargs: str(kwargs),
+        })()
+        formatted = runtime.format_messages([{"role": "user", "content": "Explain quantization simply."}])
+        self.assertIn("'enable_thinking': False", formatted)
+
+    def test_int8_per_tensor_safetensors_are_dequantized_with_their_scale(self) -> None:
+        import torch
+        from safetensors.torch import save_file
+        from app.runtimes.transformers_runtime import TransformersRuntime
+
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint = Path(tmp) / "model.safetensors"
+            save_file({
+                "layer.weight": torch.tensor([[-2, 0, 2]], dtype=torch.int8),
+                "layer.weight.__scale__": torch.tensor([0.5], dtype=torch.float32),
+            }, str(checkpoint), metadata={"quantization": "int8-per-tensor"})
+            weights = TransformersRuntime._load_int8_safetensors([checkpoint], torch)
+            self.assertTrue(torch.equal(weights["layer.weight"], torch.tensor([[-1.0, 0.0, 1.0]])))
 
     def test_fingerprint_matches_identical_model_directories(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -92,6 +140,54 @@ class DetectorTests(unittest.TestCase):
             manager = ModelManager(root)
             with self.assertRaises(ValueError):
                 manager.resolve_path("../outside.gguf")
+
+    def test_model_manager_accepts_only_supported_device_preferences(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = ModelManager(Path(tmp))
+            self.assertEqual(manager.device_preference, "auto")
+            for device in ("auto", "cpu", "gpu"):
+                self.assertEqual(manager.set_device_preference(device), device)
+            with self.assertRaisesRegex(ValueError, "auto, cpu, or gpu"):
+                manager.set_device_preference("tpu")
+
+    def test_model_manager_passes_the_selected_device_to_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "fixture.gguf").write_bytes(b"model")
+            manager = ModelManager(root)
+            manager.records["model"] = {"id": "model", "path": "fixture.gguf", "format": "GGUF"}
+            manager.set_device_preference("gpu")
+
+            class Runtime:
+                def __init__(self, path: Path, requested_device: str) -> None:
+                    self.requested_device = requested_device
+                    self.load_seconds = 0.1
+
+                def load_model(self) -> dict[str, str]:
+                    return {"device": self.requested_device}
+
+                def get_metadata(self) -> dict[str, str]:
+                    return {"device": self.requested_device}
+
+            with patch("app.services.model_manager.GGUFRuntime", Runtime):
+                loaded = manager.load("model")
+            self.assertEqual(loaded["runtime_metadata"]["device"], "gpu")
+            manager.set_device_preference("cpu")
+            with self.assertRaisesRegex(RuntimeError, "Unload it before switching"):
+                manager.load("model")
+
+    def test_transformers_gpu_selection_does_not_fall_back_to_cpu(self) -> None:
+        from app.runtimes.transformers_runtime import TransformersRuntime
+        import torch
+
+        with tempfile.TemporaryDirectory() as tmp:
+            model_path = Path(tmp)
+            (model_path / "config.json").write_text("{}", encoding="utf-8")
+            (model_path / "weights.safetensors").write_bytes(b"fixture")
+            runtime = TransformersRuntime(model_path, requested_device="gpu")
+            with patch.object(torch.cuda, "is_available", return_value=False):
+                with self.assertRaisesRegex(RuntimeError, "no CUDA-enabled PyTorch runtime"):
+                    runtime.load_model()
 
     def test_import_extracts_local_hugging_face_zip_and_detects_quantization(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -131,6 +227,24 @@ class ApiTests(unittest.TestCase):
         response = TestClient(app).get("/health")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["mode"], "LOCAL MODE")
+
+    def test_device_preference_can_be_selected_and_is_reported_in_system_status(self) -> None:
+        from app.main import manager
+        previous = manager.device_preference
+        try:
+            response = TestClient(app).post("/system/device", json={"device": "gpu"})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["inference_device"], "gpu")
+            status = TestClient(app).get("/system/status")
+            self.assertEqual(status.status_code, 200)
+            self.assertEqual(status.json()["inference_device"], "gpu")
+            self.assertIn("supported_runtimes", status.json()["gpu"])
+        finally:
+            manager.set_device_preference(previous)
+
+    def test_device_preference_rejects_unknown_values(self) -> None:
+        response = TestClient(app).post("/system/device", json={"device": "tpu"})
+        self.assertEqual(response.status_code, 422)
 
     def test_unloaded_model_generation_is_an_explicit_error(self) -> None:
         response = TestClient(app).post("/generate", json={"model_id": "missing", "prompt": "hello"})
@@ -191,6 +305,10 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         result = response.json()
         self.assertEqual(result["original"]["evaluation"]["metrics"]["exact_match"], 1.0)
+        self.assertIsNone(result["original"]["evaluation"]["metrics"]["accuracy"])
+        self.assertIsNone(result["quantized"]["evaluation"]["metrics"]["accuracy"])
+        self.assertIsNone(result["accuracy_difference"])
+        self.assertAlmostEqual(result["token_f1_difference"], -0.5)
         self.assertEqual(result["quantized"]["evaluation"]["metrics"]["exact_match"], 0.0)
         self.assertEqual(result["prompt_comparison"]["original_output"], "same answer")
         self.assertEqual(result["prompt_comparison"]["quantized_output"], "similar answer")

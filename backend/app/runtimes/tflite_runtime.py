@@ -17,6 +17,8 @@ class TFLiteRuntime(ModelRuntime):
                 raise RuntimeError("TensorFlow Lite runtime dependency is missing. Install ai-edge-litert or tensorflow.") from exc
         if not self.model_path.is_file() or self.model_path.suffix.lower() not in {".tflite", ".lite"}:
             raise ValueError("Select a .tflite model file.")
+        if self.requested_device == "gpu":
+            raise RuntimeError("GPU inference is not supported by the TensorFlow Lite adapter yet. Choose CPU or Auto.")
         started = time.perf_counter()
         try:
             self.model = Interpreter(model_path=str(self.model_path))

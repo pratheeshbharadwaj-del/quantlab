@@ -20,6 +20,13 @@ class ModelManager:
         self.model_root = model_root.resolve()
         self.records: dict[str, dict[str, Any]] = {}
         self.loaded: dict[str, Any] = {}
+        self.device_preference = "auto"
+
+    def set_device_preference(self, device: str) -> str:
+        if device not in {"auto", "cpu", "gpu"}:
+            raise ValueError("Inference device must be auto, cpu, or gpu.")
+        self.device_preference = device
+        return self.device_preference
 
     def resolve_path(self, relative_path: str) -> Path:
         candidate = (self.model_root / relative_path).resolve()
@@ -52,13 +59,16 @@ class ModelManager:
     def load(self, model_id: str) -> dict[str, Any]:
         record = self.get(model_id)
         if model_id in self.loaded:
-            return {**record, "loaded": True, "runtime_metadata": self.loaded[model_id].get_metadata(), "load_seconds": self.loaded[model_id].load_seconds}
+            runtime = self.loaded[model_id]
+            if runtime.requested_device != self.device_preference:
+                raise RuntimeError(f"This model is already loaded with {runtime.requested_device.upper()} selected. Unload it before switching to {self.device_preference.upper()}.")
+            return {**record, "loaded": True, "runtime_metadata": runtime.get_metadata(), "load_seconds": runtime.load_seconds}
         path = self.resolve_path(record["path"])
         classes = {"GGUF": GGUFRuntime, "ONNX": ONNXRuntime, "TFLITE": TFLiteRuntime, "LITE": TFLiteRuntime, "SAFETENSORS": TransformersRuntime, "BIN": TransformersRuntime, "PT": PyTorchRuntime, "PTH": PyTorchRuntime}
         runtime_cls = classes.get(record["format"])
         if runtime_cls is None:
             raise RuntimeError("Unsupported model format for this device/runtime.")
-        runtime = runtime_cls(path)
+        runtime = runtime_cls(path, requested_device=self.device_preference)
         runtime.ram_before_load_bytes = psutil.Process().memory_info().rss
         metadata = runtime.load_model()
         runtime.ram_after_load_bytes = psutil.Process().memory_info().rss

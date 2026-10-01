@@ -2,11 +2,28 @@ from __future__ import annotations
 
 import json
 import hashlib
+import struct
 from pathlib import Path
 from typing import Any
 
 
 SUPPORTED = {"gguf": "GGUF / llama.cpp", "onnx": "ONNX Runtime", "tflite": "TensorFlow Lite", "lite": "TensorFlow Lite", "safetensors": "Transformers / PyTorch", "bin": "Transformers / PyTorch", "pt": "PyTorch", "pth": "PyTorch"}
+
+
+def _safetensors_metadata(path: Path) -> dict[str, str]:
+    try:
+        with path.open("rb") as stream:
+            raw_length = stream.read(8)
+            if len(raw_length) != 8:
+                return {}
+            header_length = struct.unpack("<Q", raw_length)[0]
+            if header_length > 16 * 1024 * 1024:
+                return {}
+            header = json.loads(stream.read(header_length).decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, struct.error):
+        return {}
+    metadata = header.get("__metadata__", {})
+    return metadata if isinstance(metadata, dict) else {}
 
 
 def detect_model(path: Path) -> dict[str, Any]:
@@ -22,6 +39,8 @@ def detect_model(path: Path) -> dict[str, Any]:
             config = json.loads(config_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             config = {}
+    safetensors_files = sorted(path.glob("*.safetensors")) if path.is_dir() else ([path] if path.suffix.lower() == ".safetensors" else [])
+    checkpoint_metadata = _safetensors_metadata(safetensors_files[0]) if safetensors_files else {}
     if config and any(x in extensions for x in ("safetensors", "bin", "pt", "pth")):
         ext = "safetensors" if "safetensors" in extensions else ("bin" if "bin" in extensions else "pt")
     tokenizer_config: dict[str, Any] = {}
@@ -46,6 +65,8 @@ def detect_model(path: Path) -> dict[str, Any]:
         # This is only a rough config-derived parameter estimate; avoid presenting it as exact.
         params = None
     quant = config.get("quantization_config")
+    if not isinstance(quant, dict) and checkpoint_metadata.get("quantization") == "int8-per-tensor":
+        quant = {"bits": 8, "quant_method": "INT8 per-tensor"}
     quant_sidecar = path / "quantization_config.json" if path.is_dir() else None
     if not isinstance(quant, dict) and quant_sidecar and quant_sidecar.is_file():
         try:
@@ -87,6 +108,7 @@ def detect_model(path: Path) -> dict[str, Any]:
         "generation_supported": ext == "gguf" or (ext in {"safetensors", "bin"} and bool(config)),
         "chat_template_available": bool(tokenizer_config.get("chat_template")),
         "chat_format_note": "Tokenizer declares a chat template" if tokenizer_config.get("chat_template") else ("No tokenizer chat template detected; this model may only complete text rather than follow chat instructions." if ext in {"safetensors", "bin"} else None),
+        "checkpoint_metadata": checkpoint_metadata,
         "compatibility_message": "Runtime available" if runtime and installed else (f"Install required runtime packages: {', '.join(missing_packages)}" if runtime else "Unsupported model format for this device/runtime"),
     }
 

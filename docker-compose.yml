@@ -1,0 +1,42 @@
+# Local/self-hosted stack for QuantLab. Useful for:
+#  - validating the containers before deploying to the cloud
+#  - a simple self-hosted "shared server" deployment (single VM/Docker host)
+#
+# Usage:
+#   docker compose up --build
+#   Frontend: http://localhost:8080
+#   Backend:  http://localhost:8000
+#
+# Model files are persisted in the "quantlab-models" named volume so they
+# survive container restarts. To use a specific host directory instead, replace
+# the volume with a bind mount, e.g. "./models:/data/models".
+services:
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      # Comma-separated list of origins allowed to call this API. Must match
+      # wherever the frontend is actually served from.
+      QNT_ALLOWED_ORIGINS: ${QNT_ALLOWED_ORIGINS:-http://localhost:8080}
+    volumes:
+      - quantlab-models:/data/models
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "8080:80"
+    environment:
+      # Base URL the browser uses to reach the backend above. When both
+      # containers run on the same Docker host, http://localhost:8000 works
+      # because the browser (not the container) makes the request.
+      QNT_API_URL: ${QNT_API_URL:-http://localhost:8000}
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  quantlab-models:

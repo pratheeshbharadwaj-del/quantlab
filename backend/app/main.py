@@ -8,7 +8,7 @@ import re
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import psutil
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -29,9 +29,15 @@ DATASET_PATH = BASE_DIR / "evaluation_dataset.json"
 MAX_MODEL_UPLOAD_BYTES = 16 * 1024**3
 MODEL_UPLOAD_EXTENSIONS = {".zip", ".gguf", ".onnx", ".tflite", ".lite", ".safetensors", ".bin", ".pt", ".pth"}
 GENERATION_MAX_TOKENS = 64
+GENERATION_TEMPERATURE = 0.6
+GENERATION_TOP_P = 0.95
+
+DEFAULT_ALLOWED_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]
+_extra_origins = [origin.strip() for origin in os.environ.get("QNT_ALLOWED_ORIGINS", "").split(",") if origin.strip()]
+ALLOWED_ORIGINS = _extra_origins or DEFAULT_ALLOWED_ORIGINS
 
 app = FastAPI(title="Local Model Evaluation", version="1.0.0", description="Local-only model inference and quantization evaluation.")
-app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_methods=["*"], allow_headers=["*"])
 
 
 class ImportRequest(BaseModel):
@@ -64,6 +70,10 @@ class BenchmarkRequest(BaseModel):
     runs: int = Field(default=3, ge=1, le=10)
 
 
+class DeviceRequest(BaseModel):
+    device: Literal["auto", "cpu", "gpu"]
+
+
 def _http_error(exc: Exception) -> HTTPException:
     if isinstance(exc, KeyError):
         return HTTPException(404, str(exc))
@@ -89,11 +99,13 @@ def _peak_process_rss() -> int | None:
 
 def _evaluate_one(model_id: str, dataset: list[dict[str, Any]]) -> dict[str, Any]:
     results = []
+    runtime = manager.loaded[model_id]
+    formatter = getattr(runtime, "format_messages", None)
     for row in dataset:
-        generated, _ = manager.generate(model_id, row["question"], GENERATION_MAX_TOKENS, 0.0, 1.0)
+        prompt = formatter([{"role": "user", "content": row["question"]}]) if callable(formatter) else row["question"]
+        generated, _ = manager.generate(model_id, prompt, GENERATION_MAX_TOKENS, GENERATION_TEMPERATURE, GENERATION_TOP_P)
         results.append({"id": row.get("id"), "question": row["question"], "expected_answer": row.get("expected_answer"), "output": generated["text"], "generation_time": generated["generation_time"], "tokens_generated": generated["tokens_generated"], "tokens_per_second": generated["tokens_per_second"]})
     scores = score_outputs(results)
-    runtime = manager.loaded[model_id]
     refs = "\n".join(str(row.get("expected_answer", "")) for row in dataset)
     ppl = runtime.perplexity(refs) if refs.strip() else None
     times = [row["generation_time"] for row in results]
@@ -103,6 +115,19 @@ def _evaluate_one(model_id: str, dataset: list[dict[str, Any]]) -> dict[str, Any
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {"status": "ok", "mode": "LOCAL MODE", "model_directory": str(MODEL_ROOT)}
+
+
+@app.post("/system/device")
+def set_inference_device(request: DeviceRequest) -> dict[str, str]:
+    try:
+        return {"inference_device": manager.set_device_preference(request.device)}
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
+@app.get("/system/status")
+def get_system_status() -> dict[str, Any]:
+    return {**system_status(), "inference_device": manager.device_preference}
 
 
 @app.post("/models/import")
@@ -229,7 +254,7 @@ def generate(request: GenerateRequest) -> dict[str, Any]:
         if runtime is None:
             raise RuntimeError("Load this model before generating text.")
         prompt = _generation_prompt(runtime, request.prompt, request.messages)
-        output, _ = manager.generate(request.model_id, prompt, GENERATION_MAX_TOKENS, 0.0, 1.0)
+        output, _ = manager.generate(request.model_id, prompt, GENERATION_MAX_TOKENS, GENERATION_TEMPERATURE, GENERATION_TOP_P)
         return {"model_id": request.model_id, **output}
     except Exception as exc:
         raise _http_error(exc) from exc
@@ -245,7 +270,7 @@ def generate_stream(request: GenerateRequest) -> StreamingResponse:
     except Exception as exc:
         raise _http_error(exc) from exc
     def events():
-        stream = runtime.generate_stream(prompt, GENERATION_MAX_TOKENS, 0.0, 1.0)
+        stream = runtime.generate_stream(prompt, GENERATION_MAX_TOKENS, GENERATION_TEMPERATURE, GENERATION_TOP_P)
         try:
             for event in stream:
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
@@ -301,8 +326,8 @@ def compare(request: CompareRequest) -> dict[str, Any]:
         quantized_result = _evaluate_one(request.quantized_model_id, dataset) if dataset else None
         prompt_result = None
         if request.prompt:
-            left, _ = manager.generate(request.original_model_id, request.prompt, GENERATION_MAX_TOKENS, 0.0, 1.0)
-            right, _ = manager.generate(request.quantized_model_id, request.prompt, GENERATION_MAX_TOKENS, 0.0, 1.0)
+            left, _ = manager.generate(request.original_model_id, request.prompt, GENERATION_MAX_TOKENS, GENERATION_TEMPERATURE, GENERATION_TOP_P)
+            right, _ = manager.generate(request.quantized_model_id, request.prompt, GENERATION_MAX_TOKENS, GENERATION_TEMPERATURE, GENERATION_TOP_P)
             prompt_result = {"prompt": request.prompt, "original_output": left["text"], "quantized_output": right["text"], "output_similarity": output_similarity(left["text"], right["text"]), "original_generation": left, "quantized_generation": right}
         original_size, quantized_size = original["size_bytes"], quantized["size_bytes"]
         comparison = {
@@ -311,9 +336,10 @@ def compare(request: CompareRequest) -> dict[str, Any]:
             "size_reduction_percent": (original_size - quantized_size) / original_size * 100 if original_size else None,
             "memory": {"original_ram_bytes": manager.loaded[request.original_model_id].ram_increase_bytes if hasattr(manager.loaded[request.original_model_id], "ram_increase_bytes") else None, "quantized_ram_bytes": manager.loaded[request.quantized_model_id].ram_increase_bytes if hasattr(manager.loaded[request.quantized_model_id], "ram_increase_bytes") else None, "original_before_bytes": manager.loaded[request.original_model_id].ram_before_load_bytes if hasattr(manager.loaded[request.original_model_id], "ram_before_load_bytes") else None, "original_after_bytes": manager.loaded[request.original_model_id].ram_after_load_bytes if hasattr(manager.loaded[request.original_model_id], "ram_after_load_bytes") else None, "quantized_before_bytes": manager.loaded[request.quantized_model_id].ram_before_load_bytes if hasattr(manager.loaded[request.quantized_model_id], "ram_before_load_bytes") else None, "quantized_after_bytes": manager.loaded[request.quantized_model_id].ram_after_load_bytes if hasattr(manager.loaded[request.quantized_model_id], "ram_after_load_bytes") else None},
             "prompt_comparison": prompt_result,
-            "interpretation": "Scores are calculated from the provided expected answers. Output similarity is lexical Jaccard similarity, not accuracy. N/A values mean the selected runtime does not support that measurement."
+            "interpretation": "Exact match and token F1 are lexical comparisons against the supplied reference answers; they do not determine semantic correctness. Accuracy is unavailable for free-form text without human labels or a validated task-specific scorer. Output similarity is lexical Jaccard overlap, not accuracy. N/A values mean the selected runtime does not support that measurement."
         }
-        comparison["accuracy_difference"] = (quantized_result["metrics"]["exact_match"] - original_result["metrics"]["exact_match"]) if original_result and quantized_result and original_result["metrics"]["exact_match"] is not None and quantized_result["metrics"]["exact_match"] is not None else None
+        comparison["accuracy_difference"] = None
+        comparison["token_f1_difference"] = (quantized_result["metrics"]["token_f1"] - original_result["metrics"]["token_f1"]) if original_result and quantized_result and original_result["metrics"]["token_f1"] is not None and quantized_result["metrics"]["token_f1"] is not None else None
         evaluation_id = str(uuid.uuid4())
         comparison["id"] = evaluation_id
         evaluations[evaluation_id] = comparison
@@ -362,7 +388,7 @@ def run_benchmark(request: BenchmarkRequest) -> dict[str, Any]:
         for index in range(request.runs):
             start_rss = psutil.Process().memory_info().rss
             started = time.perf_counter()
-            output, _ = manager.generate(request.model_id, request.prompt, GENERATION_MAX_TOKENS, 0.0, 1.0)
+            output, _ = manager.generate(request.model_id, request.prompt, GENERATION_MAX_TOKENS, GENERATION_TEMPERATURE, GENERATION_TOP_P)
             records.append({"run": index + 1, "generation_time": time.perf_counter() - started, "first_token_latency_seconds": None, "tokens_generated": output["tokens_generated"], "tokens_per_second": output["tokens_per_second"], "process_rss_before_bytes": start_rss, "process_rss_after_bytes": psutil.Process().memory_info().rss, "peak_process_rss_bytes": _peak_process_rss(), "warmup": index == 0 and request.runs > 1})
         measured = [r for r in records if not r["warmup"]] or records
         speeds = [r["tokens_per_second"] for r in measured if r["tokens_per_second"] is not None]
@@ -370,8 +396,3 @@ def run_benchmark(request: BenchmarkRequest) -> dict[str, Any]:
         return {"model_id": request.model_id, "runs": records, "warmup_discarded": len(measured) != len(records), "summary": {"generation_time_average": sum(times) / len(times), "generation_time_min": min(times), "generation_time_max": max(times), "tokens_per_second_average": sum(speeds) / len(speeds) if speeds else None, "tokens_per_second_min": min(speeds) if speeds else None, "tokens_per_second_max": max(speeds) if speeds else None}}
     except Exception as exc:
         raise _http_error(exc) from exc
-
-
-@app.get("/system/status")
-def get_system_status() -> dict[str, Any]:
-    return system_status()

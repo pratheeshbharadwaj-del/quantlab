@@ -10,14 +10,19 @@ from .base import ModelRuntime
 class GGUFRuntime(ModelRuntime):
     def load_model(self) -> dict[str, Any]:
         try:
-            from llama_cpp import Llama
+            from llama_cpp import Llama, llama_supports_gpu_offload
         except ImportError as exc:
             raise RuntimeError("GGUF runtime dependency is missing. Install llama-cpp-python.") from exc
         if not self.model_path.is_file() or self.model_path.suffix.lower() != ".gguf":
             raise ValueError("Select a GGUF model file.")
+        gpu_supported = llama_supports_gpu_offload()
+        if self.requested_device == "gpu" and not gpu_supported:
+            raise RuntimeError("GPU was selected, but the installed llama-cpp-python build does not support GPU offload. Install a CUDA-enabled llama-cpp-python build.")
+        use_gpu = self.requested_device == "gpu" or (self.requested_device == "auto" and gpu_supported)
+        self.device = "gpu" if use_gpu else "cpu"
         started = time.perf_counter()
         try:
-            self.model = Llama(model_path=str(self.model_path), verbose=False)
+            self.model = Llama(model_path=str(self.model_path), n_gpu_layers=-1 if use_gpu else 0, verbose=False)
         except Exception as exc:
             raise RuntimeError(f"GGUF model could not be loaded: {exc}") from exc
         self.load_seconds = time.perf_counter() - started
@@ -57,7 +62,7 @@ class GGUFRuntime(ModelRuntime):
         quant_types = {0: "F32", 1: "F16", 2: "Q4_0", 3: "Q4_1", 7: "Q8_0", 8: "Q5_0", 9: "Q5_1", 10: "Q2_K", 11: "Q3_K_S", 12: "Q3_K_M", 13: "Q3_K_L", 14: "Q4_K_S", 15: "Q4_K_M", 16: "Q5_K_S", 17: "Q5_K_M", 18: "Q6_K"}
         numeric_type = int(file_type) if isinstance(file_type, (int, str)) and str(file_type).isdigit() else file_type
         quant = quant_types.get(numeric_type, str(file_type) if file_type is not None else None)
-        return {"name": details.get("general.name"), "architecture": arch, "quantization": quant, "metadata": details}
+        return {"name": details.get("general.name"), "architecture": arch, "quantization": quant, "device": self.device, "metadata": details}
 
     def get_supported_features(self) -> list[str]:
         return ["load", "generate", "streaming", "metadata", "model_size", "memory"]

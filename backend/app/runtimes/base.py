@@ -8,8 +8,10 @@ from typing import Any
 class ModelRuntime(ABC):
     """Contract for a locally executing model backend."""
 
-    def __init__(self, model_path: Path) -> None:
+    def __init__(self, model_path: Path, requested_device: str = "auto") -> None:
         self.model_path = model_path
+        self.requested_device = requested_device
+        self.device = "cpu"
         self.model: Any = None
         self.load_seconds: float | None = None
 

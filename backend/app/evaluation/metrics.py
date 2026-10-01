@@ -36,8 +36,9 @@ def output_similarity(left: str, right: str) -> float | None:
 def score_outputs(items: list[dict[str, Any]]) -> dict[str, float | None]:
     usable = [item for item in items if isinstance(item.get("expected_answer"), str)]
     if not usable:
-        return {"exact_match": None, "token_f1": None}
+        return {"exact_match": None, "token_f1": None, "accuracy": None}
     return {
         "exact_match": sum(exact_match(x["output"], x["expected_answer"]) for x in usable) / len(usable),
         "token_f1": sum(token_f1(x["output"], x["expected_answer"]) for x in usable) / len(usable),
+        "accuracy": None,
     }
