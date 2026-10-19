@@ -24,6 +24,13 @@ export const api = {
   browseModelFiles: (path = '') => request<LocalModelEntry[]>(`/models/files${path ? `?path=${encodeURIComponent(path)}` : ''}`),
   importModel: (path: string, format_hint = 'AUTO', role: 'original' | 'quantized' | 'library' = 'library') => request<Model>('/models/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, format_hint, role }) }),
   uploadModel: async (file: File, role: 'original' | 'quantized') => {
+    const health = await request<{ cloud_storage?: boolean }>('/health')
+    if (health.cloud_storage) {
+      const { key, upload_url } = await request<{ key: string; upload_url: string }>('/models/presign', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename: file.name }) })
+      const put = await fetch(upload_url, { method: 'PUT', body: file })
+      if (!put.ok) throw new Error(`Upload to cloud storage failed (${put.status}). Check the bucket CORS settings.`)
+      return request<Model>('/models/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, filename: file.name, role }) })
+    }
     const form = new FormData(); form.append('file', file); form.append('role', role)
     return request<Model>('/models/upload', { method: 'POST', body: form })
   },

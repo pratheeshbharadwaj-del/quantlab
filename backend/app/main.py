@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.evaluation.metrics import output_similarity, score_outputs
+from app.services import cloud_storage
 from app.services.hardware_monitor import system_status
 from app.services.model_manager import ModelManager
 
@@ -114,7 +115,7 @@ def _evaluate_one(model_id: str, dataset: list[dict[str, Any]]) -> dict[str, Any
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    return {"status": "ok", "mode": "LOCAL MODE", "model_directory": str(MODEL_ROOT)}
+    return {"status": "ok", "mode": "LOCAL MODE", "model_directory": str(MODEL_ROOT), "cloud_storage": cloud_storage.is_enabled()}
 
 
 @app.post("/system/device")
@@ -196,6 +197,52 @@ async def upload_model(file: UploadFile = File(...), role: str = Form("original"
         raise _http_error(exc) from exc
     finally:
         await file.close()
+
+
+class PresignRequest(BaseModel):
+    filename: str = Field(min_length=1, max_length=300)
+
+
+class RegisterRequest(BaseModel):
+    key: str = Field(min_length=1, max_length=300)
+    filename: str = Field(min_length=1, max_length=300)
+    role: Literal["original", "quantized"] = "original"
+
+
+@app.post("/models/presign")
+def presign_model_upload(request: PresignRequest) -> dict[str, Any]:
+    if not cloud_storage.is_enabled():
+        raise HTTPException(501, "Cloud storage is not configured on this backend. Use /models/upload instead.")
+    extension = Path(request.filename).suffix.lower()
+    if extension not in MODEL_UPLOAD_EXTENSIONS:
+        raise HTTPException(400, f"Unsupported model file extension: {extension or 'none'}.")
+    try:
+        key = cloud_storage.new_object_key(request.filename)
+        return {"key": key, "upload_url": cloud_storage.presign_upload(key), "max_bytes": MAX_MODEL_UPLOAD_BYTES}
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
+@app.post("/models/register")
+def register_cloud_model(request: RegisterRequest) -> dict[str, Any]:
+    """Fetch an object the browser uploaded to the bucket into the local cache and import it."""
+    if not cloud_storage.is_enabled():
+        raise HTTPException(501, "Cloud storage is not configured on this backend.")
+    destination: Path | None = None
+    try:
+        size = cloud_storage.object_size(request.key)
+        if size == 0 or size > MAX_MODEL_UPLOAD_BYTES:
+            raise ValueError("Stored model is empty or exceeds the 16 GiB limit.")
+        destination = MODEL_ROOT / ".uploads" / Path(request.key).name
+        cloud_storage.download_to(request.key, destination)
+        record = manager.import_model(str(destination.relative_to(MODEL_ROOT)))
+        record["name"] = Path(request.filename).stem
+        record["storage_key"] = request.key
+        return _assign_model_role(record, request.role)
+    except Exception as exc:
+        if destination is not None:
+            destination.unlink(missing_ok=True)
+        raise _http_error(exc) from exc
 
 
 @app.post("/models/load")

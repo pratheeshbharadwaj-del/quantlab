@@ -2,6 +2,7 @@ fastapi>=0.115,<1
 uvicorn[standard]>=0.30,<1
 psutil>=6,<8
 python-multipart>=0.0.9
+boto3>=1.34,<2
 pydantic>=2.8,<3
 # Optional model runtimes (install only when needed):
 # pip install llama-cpp-python

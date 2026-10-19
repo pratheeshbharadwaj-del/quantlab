@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: quantlab-api
+    runtime: docker
+    dockerContext: ./backend
+    dockerfilePath: ./backend/Dockerfile
+    plan: starter # persistent disks need a paid plan (~$7/mo)
+    healthCheckPath: /health
+    disk:
+      name: quantlab-cache
+      mountPath: /data/models
+      sizeGB: 20
+    envVars:
+      - key: PORT
+        value: "8000"
+      - key: QNT_ALLOWED_ORIGINS
+        sync: false
+      - key: QNT_S3_ENDPOINT
+        sync: false
+      - key: QNT_S3_BUCKET
+        sync: false
+      - key: QNT_S3_ACCESS_KEY_ID
+        sync: false
+      - key: QNT_S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: QNT_S3_REGION
+        value: auto
