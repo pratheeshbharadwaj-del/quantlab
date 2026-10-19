@@ -1,0 +1,11 @@
+.git
+.venv
+.env
+.env.*
+!.env.example
+**/__pycache__
+**/node_modules
+frontend/dist
+backend/models
+backend/*.log
+*.zip

@@ -443,3 +443,15 @@ def run_benchmark(request: BenchmarkRequest) -> dict[str, Any]:
         return {"model_id": request.model_id, "runs": records, "warmup_discarded": len(measured) != len(records), "summary": {"generation_time_average": sum(times) / len(times), "generation_time_min": min(times), "generation_time_max": max(times), "tokens_per_second_average": sum(speeds) / len(speeds) if speeds else None, "tokens_per_second_min": min(speeds) if speeds else None, "tokens_per_second_max": max(speeds) if speeds else None}}
     except Exception as exc:
         raise _http_error(exc) from exc
+
+
+STATIC_DIR = Path(os.environ.get("QNT_STATIC_DIR", "")).resolve() if os.environ.get("QNT_STATIC_DIR") else None
+if STATIC_DIR is not None and (STATIC_DIR / "index.html").is_file():
+    from fastapi.responses import FileResponse
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def serve_frontend(full_path: str) -> FileResponse:
+        candidate = (STATIC_DIR / full_path).resolve()
+        if full_path and STATIC_DIR in candidate.parents and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(STATIC_DIR / "index.html")

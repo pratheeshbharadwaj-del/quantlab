@@ -6,6 +6,8 @@ Browsers upload models straight to R2 with pre-signed URLs; the backend then pul
 Costs: Pages free, R2 free up to 10 GB, Render Starter ~$7/mo (needed for the persistent disk and enough RAM; large models may need a bigger plan).
 No custom domain needed: you get `*.pages.dev` and `*.onrender.com` URLs.
 
+> **Simplest path:** the root `Dockerfile` serves the UI and API from one container (`render.yaml` uses it). In that case skip section 4 (Pages), and `QNT_ALLOWED_ORIGINS` is not needed. Only the R2 bucket CORS rule must allow your Render URL (`https://<service>.onrender.com`).
+
 ## 1. Push to GitHub (repo already exists)
 ```powershell
 cd "d:\qnt app"
